@@ -2,10 +2,13 @@
 
 ## Repository Setup
 
-- Short description: `One-click Android battery health and cycle report via USB ADB`
+- Short description: `One-click Android and iPhone battery health report over USB`
 - Topics:
   - `android`
+  - `iphone`
+  - `ios`
   - `adb`
+  - `libimobiledevice`
   - `battery-health`
   - `battery`
   - `samsung`
@@ -26,9 +29,9 @@
 ## Message
 
 ```text
-I built a Windows one-click Android battery health auditor.
-It uses authorized USB ADB, does not need root, and creates HTML/CSV reports.
-Samsung is tested; Pixel/OnePlus/Oppo are best effort. Compatibility reports welcome.
+I built a Windows one-click phone battery health auditor.
+It checks Android over authorized USB ADB and iPhone/iPad over trusted USB pairing.
+Samsung is tested; iPhone/Pixel/OnePlus/Oppo are best effort. Compatibility reports welcome.
 ```
 
 ## What Gets Stars

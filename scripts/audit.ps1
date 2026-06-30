@@ -11,6 +11,8 @@ param(
   [string]$Device,
   [switch]$ListOnly,
   [switch]$NoOpenReport,
+  [switch]$AndroidOnly,
+  [switch]$IosOnly,
   [switch]$Help
 )
 
@@ -33,13 +35,15 @@ $Rows = New-Object System.Collections.Generic.List[object]
 
 if ($Help) {
   Write-Host @"
-Android Battery Auditor
+Phone Battery Auditor
 
 Usage:
-  run.cmd                  Run pure ADB audit and open an HTML report
-  run.cmd -ListOnly        Show connected ADB devices only
+  run.cmd                  Audit Android and iPhone/iPad devices, then open an HTML report
+  run.cmd -ListOnly        Show connected Android/iOS devices only
   run.cmd -Device SERIAL   Audit one selected device
   run.cmd -NoOpenReport    Save reports without opening the HTML report
+  run.cmd -AndroidOnly     Skip iPhone/iPad scanning
+  run.cmd -IosOnly         Skip Android scanning
 
 Optional app setup:
   run.cmd -SetupApps       Install/use Shizuku and optional apks\abattery.apk
@@ -47,7 +51,8 @@ Optional app setup:
   run.cmd -LaunchApp       Open aBattery/Batt after the report
 
 Required on the phone:
-  Developer options -> USB debugging -> Allow USB debugging prompt
+  Android: Developer options -> USB debugging -> Allow USB debugging prompt
+  iPhone/iPad: Unlock -> Trust This Computer
 "@
   exit 0
 }
@@ -146,6 +151,200 @@ function Ensure-Apks {
     Shizuku = $shizukuPath
     Batt = $battPath
     ABattery = Join-Path $ApksDir "abattery.apk"
+  }
+}
+
+function Find-IosTool {
+  param([string]$Name)
+  $local = Get-ChildItem -LiteralPath $ToolsDir -Recurse -Filter $Name -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($local) {
+    return $local.FullName
+  }
+  $pathTool = Get-Command $Name -ErrorAction SilentlyContinue
+  if ($pathTool) {
+    return $pathTool.Source
+  }
+  return $null
+}
+
+function Ensure-IosTools {
+  $ideviceId = Find-IosTool "idevice_id.exe"
+  $diagnostics = Find-IosTool "idevicediagnostics.exe"
+  if ($ideviceId -and $diagnostics) {
+    return @{
+      Id = $ideviceId
+      Info = Find-IosTool "ideviceinfo.exe"
+      Pair = Find-IosTool "idevicepair.exe"
+      Diagnostics = $diagnostics
+    }
+  }
+
+  if ($SkipDownloads) {
+    Write-Step "iOS tools were not found and downloads are skipped."
+    return $null
+  }
+
+  Write-Step "Downloading libimobiledevice Windows tools for iPhone/iPad support..."
+  $release = Invoke-RestMethod -Uri "https://api.github.com/repos/jrjr/libimobiledevice-windows/releases/latest"
+  $asset = $release.assets | Where-Object { $_.name -like "*w64*.zip" -or $_.name -like "*.zip" } | Select-Object -First 1
+  if (-not $asset) {
+    Write-Step "Could not find libimobiledevice Windows zip in the latest release."
+    return $null
+  }
+  $zipPath = Join-Path $DownloadsDir $asset.name
+  Download-FileIfMissing -Uri $asset.browser_download_url -Path $zipPath -Name "libimobiledevice Windows tools $($release.tag_name)"
+  $dest = Join-Path $ToolsDir "libimobiledevice"
+  Expand-Archive -Path $zipPath -DestinationPath $dest -Force
+
+  return @{
+    Id = Find-IosTool "idevice_id.exe"
+    Info = Find-IosTool "ideviceinfo.exe"
+    Pair = Find-IosTool "idevicepair.exe"
+    Diagnostics = Find-IosTool "idevicediagnostics.exe"
+  }
+}
+
+function Invoke-IosTool {
+  param(
+    [string]$Exe,
+    [string[]]$ToolArgs,
+    [switch]$AllowFail
+  )
+  if (-not $Exe) {
+    return ""
+  }
+  $output = & $Exe @ToolArgs 2>&1
+  $exit = $LASTEXITCODE
+  $text = ($output | ForEach-Object { $_.ToString() }) -join "`n"
+  Add-Content -LiteralPath $LogPath -Value ("> $([IO.Path]::GetFileName($Exe)) " + ($ToolArgs -join " "))
+  if ($text) {
+    Add-Content -LiteralPath $LogPath -Value $text
+  }
+  if ($exit -ne 0 -and -not $AllowFail) {
+    throw "$([IO.Path]::GetFileName($Exe)) failed ($exit): $text"
+  }
+  return $text.Trim()
+}
+
+function Get-IosDevices {
+  param($IosTools)
+  if (-not $IosTools -or -not $IosTools.Id) {
+    return @()
+  }
+  $raw = Invoke-IosTool -Exe $IosTools.Id -ToolArgs @("-l") -AllowFail
+  $devices = @()
+  foreach ($line in ($raw -split "`r?`n")) {
+    $udid = $line.Trim()
+    if ($udid -match "^[A-Fa-f0-9-]{8,}$") {
+      $devices += [pscustomobject]@{ Serial = $udid; State = "device"; Details = "ios" }
+    } elseif ($udid -match "ERROR|Unable|No device") {
+      Write-Step "iOS scan: $udid"
+    }
+  }
+  if ($Device) {
+    $devices = $devices | Where-Object { $_.Serial -eq $Device }
+  }
+  return @($devices)
+}
+
+function Get-IosInfoValue {
+  param($IosTools, [string]$Udid, [string]$Key)
+  if (-not $IosTools.Info) {
+    return $null
+  }
+  return Invoke-IosTool -Exe $IosTools.Info -ToolArgs @("-u", $Udid, "-k", $Key) -AllowFail
+}
+
+function Get-PlistValue {
+  param([string]$Text, [string]$Key)
+  $escaped = [regex]::Escape($Key)
+  $patterns = @(
+    "<key>$escaped</key>\s*<integer>([^<]+)</integer>",
+    "<key>$escaped</key>\s*<real>([^<]+)</real>",
+    "<key>$escaped</key>\s*<string>([^<]+)</string>",
+    '"' + $escaped + '"\s*=\s*"?([^";\r\n]+)"?'
+  )
+  foreach ($pattern in $patterns) {
+    $value = Get-RegexValue -Text $Text -Pattern $pattern
+    if ($value) {
+      return $value
+    }
+  }
+  return $null
+}
+
+function Collect-IosBatteryInfo {
+  param($IosTools, [string]$Udid)
+
+  if ($IosTools.Pair) {
+    Invoke-IosTool -Exe $IosTools.Pair -ToolArgs @("-u", $Udid, "pair") -AllowFail | Out-Null
+  }
+
+  $deviceName = Get-IosInfoValue -IosTools $IosTools -Udid $Udid -Key "DeviceName"
+  $productType = Get-IosInfoValue -IosTools $IosTools -Udid $Udid -Key "ProductType"
+  $productVersion = Get-IosInfoValue -IosTools $IosTools -Udid $Udid -Key "ProductVersion"
+  $serial = Get-IosInfoValue -IosTools $IosTools -Udid $Udid -Key "SerialNumber"
+
+  $battery = ""
+  if ($IosTools.Diagnostics) {
+    $battery = Invoke-IosTool -Exe $IosTools.Diagnostics -ToolArgs @("-u", $Udid, "ioregentry", "AppleSmartBattery") -AllowFail
+    if (-not $battery -or $battery -match "ERROR|Could not") {
+      $battery = Invoke-IosTool -Exe $IosTools.Diagnostics -ToolArgs @("-u", $Udid, "ioreg", "AppleSmartBattery") -AllowFail
+    }
+  }
+
+  $cycle = Get-PlistValue -Text $battery -Key "CycleCount"
+  $design = Get-PlistValue -Text $battery -Key "DesignCapacity"
+  $rawMax = Get-PlistValue -Text $battery -Key "AppleRawMaxCapacity"
+  $nominal = Get-PlistValue -Text $battery -Key "NominalChargeCapacity"
+  $max = Get-PlistValue -Text $battery -Key "MaxCapacity"
+  $current = Get-PlistValue -Text $battery -Key "CurrentCapacity"
+  $temperature = Get-PlistValue -Text $battery -Key "Temperature"
+  $voltage = Get-PlistValue -Text $battery -Key "Voltage"
+  $serialBattery = Get-PlistValue -Text $battery -Key "BatterySerialNumber"
+
+  $fullMah = Convert-ToMah $(if ($rawMax) { $rawMax } elseif ($nominal) { $nominal } else { $null })
+  $designMah = Convert-ToMah $design
+  $healthFromCapacity = $null
+  if ($fullMah -and $designMah -and $designMah -gt 0) {
+    $healthFromCapacity = [math]::Round(($fullMah / $designMah) * 100.0, 1)
+  } elseif ($max) {
+    $healthFromCapacity = Convert-ToNumber $max
+  }
+
+  return [pscustomobject]@{
+    timestamp = (Get-Date).ToString("s")
+    platform = "iOS"
+    serial = $(if ($serial) { $serial } else { $Udid })
+    udid = $Udid
+    manufacturer = "Apple"
+    brand = "Apple"
+    model = $(if ($deviceName) { "$deviceName ($productType)" } else { $productType })
+    android = $(if ($productVersion) { "iOS $productVersion" } else { "iOS" })
+    sdk = $null
+    level_percent = $current
+    status = $null
+    health_text = $null
+    voltage_mv = $voltage
+    temperature_c = $(if ($temperature) { [math]::Round((Convert-ToNumber $temperature) / 100.0, 1) } else { $null })
+    charge_counter_mah = $null
+    estimated_full_from_charge_counter_mah = $null
+    cycle_count = $cycle
+    cycle_source = "AppleSmartBattery CycleCount"
+    samsung_cycle_estimate = $null
+    samsung_discharge_level = $null
+    full_capacity_mah = $fullMah
+    full_capacity_source = $(if ($rawMax) { "AppleSmartBattery AppleRawMaxCapacity" } elseif ($nominal) { "AppleSmartBattery NominalChargeCapacity" } else { $null })
+    design_capacity_mah = $designMah
+    design_capacity_source = "AppleSmartBattery DesignCapacity"
+    health_percent_sysfs = $null
+    health_percent_from_capacity = $healthFromCapacity
+    samsung_asoc_percent = $null
+    samsung_bsoh_percent = $null
+    samsung_first_use_date = $null
+    samsung_qr_data = $null
+    apple_battery_serial = $serialBattery
+    confidence = $(if ($healthFromCapacity -or $cycle) { "high" } elseif ($battery) { "partial" } else { "unknown" })
   }
 }
 
@@ -598,6 +797,7 @@ function Collect-BatteryInfo {
 
   return [pscustomobject]@{
     timestamp = (Get-Date).ToString("s")
+    platform = "Android"
     serial = $Serial
     manufacturer = $manufacturer
     brand = $brand
@@ -660,7 +860,8 @@ function Write-HtmlReport {
     [pscustomobject]@{
       Serial = [string]$row.serial
       Device = [string]"$($row.manufacturer) $($row.model)"
-      Android = [string]$row.android
+      Platform = [string]$row.platform
+      OS = [string]$row.android
       Battery = [string]"$($row.level_percent)%"
       "Maximum capacity" = [string]$capacity
       Cycles = [string]$cycles
@@ -679,42 +880,52 @@ function Write-HtmlReport {
   th { background: #f9fafb; font-weight: 600; }
 </style>
 "@
-  $html = $items | ConvertTo-Html -Title "Android Battery Auditor Report" -Head $head -PreContent "<h1>Android Battery Auditor Report</h1><p>Generated $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")</p>"
+  $html = $items | ConvertTo-Html -Title "Phone Battery Auditor Report" -Head $head -PreContent "<h1>Phone Battery Auditor Report</h1><p>Generated $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")</p>"
   Set-Content -LiteralPath $Path -Value $html -Encoding UTF8
 }
 
-Write-Step "Android Battery Auditor started."
-$script:Adb = Ensure-Adb
-Write-Step "Using adb: $script:Adb"
+Write-Step "Phone Battery Auditor started."
 
 $apks = $null
 if ($SetupApps -or $InstallBatt -or $LaunchApp -or $ReadScreen) {
   $apks = Ensure-Apks
 } else {
-  Write-Step "App setup is disabled by default. Running pure ADB battery audit."
-}
-$devices = @(Get-Devices)
-if ($devices.Count -eq 0) {
-  Write-Step "No ADB devices found. Connect a phone with USB debugging enabled."
-  exit 2
+  Write-Step "App setup is disabled by default. Running pure USB battery audit."
 }
 
-Write-Step "Found $($devices.Count) ADB device(s)."
-foreach ($dev in $devices) {
-  Write-Step "Device $($dev.Serial): $($dev.State) $($dev.Details)"
+$androidDevices = @()
+if (-not $IosOnly) {
+  $script:Adb = Ensure-Adb
+  Write-Step "Using adb: $script:Adb"
+  $androidDevices = @(Get-Devices)
+  Write-Step "Found $($androidDevices.Count) Android ADB device(s)."
+  foreach ($dev in $androidDevices) {
+    Write-Step "Android $($dev.Serial): $($dev.State) $($dev.Details)"
+  }
+}
+
+$iosTools = $null
+$iosDevices = @()
+if (-not $AndroidOnly) {
+  $iosTools = Ensure-IosTools
+  $iosDevices = @(Get-IosDevices -IosTools $iosTools)
+  Write-Step "Found $($iosDevices.Count) iPhone/iPad device(s)."
+  foreach ($dev in $iosDevices) {
+    Write-Step "iOS $($dev.Serial): $($dev.State) $($dev.Details)"
+  }
 }
 
 if ($ListOnly) {
   exit 0
 }
 
-foreach ($dev in $devices) {
+foreach ($dev in $androidDevices) {
   if ($dev.State -ne "device") {
-    Write-Step "Skipping $($dev.Serial): state is '$($dev.State)'. If it says unauthorized, tap 'Allow USB debugging' on the phone and run again."
+    Write-Step "Skipping Android $($dev.Serial): state is '$($dev.State)'. If it says unauthorized, tap 'Allow USB debugging' on the phone and run again."
     continue
   }
 
-  Write-Step "Processing $($dev.Serial)..."
+  Write-Step "Processing Android $($dev.Serial)..."
 
   if (($SetupApps -or $InstallBatt) -and -not $NoInstall) {
     Install-Apk -Serial $dev.Serial -Path $apks.Shizuku -Name "Shizuku" -Package "moe.shizuku.privileged.api" | Out-Null
@@ -767,6 +978,13 @@ foreach ($dev in $devices) {
       }
     }
   }
+}
+
+foreach ($dev in $iosDevices) {
+  Write-Step "Processing iPhone/iPad $($dev.Serial)..."
+  $row = Collect-IosBatteryInfo -IosTools $iosTools -Udid $dev.Serial
+  $Rows.Add($row)
+  Print-Result -Row $row
 }
 
 if ($Rows.Count -gt 0) {

@@ -1,6 +1,6 @@
 name: Compatibility report
 description: Report battery fields for a phone model
-title: "[compat] Brand Model Android version"
+title: "[compat] Brand Model OS version"
 labels: ["compatibility"]
 body:
   - type: input
@@ -14,7 +14,7 @@ body:
     id: android
     attributes:
       label: Android / ROM version
-      placeholder: Android 16, One UI 8
+      placeholder: Android 16 / iOS 18, One UI 8, etc.
     validations:
       required: true
   - type: textarea
