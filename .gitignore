@@ -1,0 +1,10 @@
+downloads/
+tools/
+logs/
+reports/*.csv
+reports/*.log
+reports/*.html
+apks/*.apk
+*.zip
+!apks/.gitkeep
+!reports/.gitkeep

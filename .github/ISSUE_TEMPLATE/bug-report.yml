@@ -1,0 +1,23 @@
+name: Bug report
+description: Report a broken command or incorrect result
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Console output
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device
+      placeholder: Brand model, Android version

@@ -1,0 +1,32 @@
+name: Compatibility report
+description: Report battery fields for a phone model
+title: "[compat] Brand Model Android version"
+labels: ["compatibility"]
+body:
+  - type: input
+    id: device
+    attributes:
+      label: Device
+      placeholder: Samsung SM-S918B
+    validations:
+      required: true
+  - type: input
+    id: android
+    attributes:
+      label: Android / ROM version
+      placeholder: Android 16, One UI 8
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Console output
+      description: Remove serial numbers if you want.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      placeholder: What was unknown? Did the report look correct?
