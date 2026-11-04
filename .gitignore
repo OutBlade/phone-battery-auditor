@@ -8,3 +8,4 @@ apks/*.apk
 *.zip
 !apks/.gitkeep
 !reports/.gitkeep
+backups/

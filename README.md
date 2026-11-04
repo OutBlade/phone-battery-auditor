@@ -47,6 +47,47 @@ The HTML report opens automatically. CSV and logs are saved in `reports\` and
 If a device hides a field, the report shows `unknown` instead of inventing a fake
 number.
 
+## Selling a device (fork additions)
+
+One command for phones, one for the laptop you are sitting at:
+
+```bat
+sellprep.cmd
+```
+
+For every connected Android phone / iPhone this:
+
+1. Prints battery health (maximum capacity, cycles) plus device name, security patch, bootloader state and storage.
+2. Lists **reset blockers**: signed-in Google / Xiaomi / Samsung / Huawei / OPPO accounts. A phone wiped with those
+   still signed in stays locked to that account (Factory Reset Protection).
+3. Lists **move first** apps: authenticators, pushTAN / SecureGo, AusweisApp, WhatsApp, Wallet, and an inserted SIM.
+4. Backs up photos (DCIM), WhatsApp / Telegram media, Documents, recordings, documents from Download,
+   and SMS / contacts / call log as text into `backups\<device>_<serial>\`, then **verifies file count and size
+   against the phone** (`backup-summary.txt`).
+5. Only if there are no blockers and the backup verified: asks you to type `ERASE <last 4 of serial>`, reboots the
+   phone into recovery and tells you which menu item wipes it. Nothing is erased by the tool itself.
+   iPhone: prints the Erase All Content and Settings steps (Apple does not allow starting a wipe over USB).
+
+`backups\` is git-ignored. It contains personal data; keep it off GitHub.
+
+Windows laptop (this PC): battery capacity from `powercfg /batteryreport`, model, serial, CPU, RAM, disks, BitLocker:
+
+```bat
+thispc.cmd          & rem report only
+thispc.cmd -Reset   & rem report, then open Windows "Reset this PC" after typing RESET
+```
+
+MacBook (run on the Mac): battery capacity and cycles from `AppleSmartBattery`, Find My Mac status,
+optional Erase All Content and Settings:
+
+```bash
+bash scripts/mac-sellprep.sh          # report only
+bash scripts/mac-sellprep.sh --reset  # then open Erase Assistant after typing ERASE
+```
+
+iPhone support needs libimobiledevice in `tools\libimobiledevice\`. The fork no longer downloads the unofficial
+build automatically; pass `-AllowIosDownload` to allow it.
+
 ## Commands
 
 ```bat

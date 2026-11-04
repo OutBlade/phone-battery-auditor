@@ -13,8 +13,24 @@ param(
   [switch]$NoOpenReport,
   [switch]$AndroidOnly,
   [switch]$IosOnly,
+  [switch]$SellPrep,
+  [switch]$Backup,
+  [switch]$PrepareReset,
+  [switch]$SkipBackup,
+  [string]$BackupDir,
+  [switch]$AllowIosDownload,
   [switch]$Help
 )
+
+if ($SellPrep) {
+  $Backup = $true
+  $PrepareReset = $true
+}
+if ($SkipBackup) {
+  $Backup = $false
+}
+
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
 $ErrorActionPreference = "Continue"
 $PSNativeCommandUseErrorActionPreference = $false
@@ -44,6 +60,14 @@ Usage:
   run.cmd -NoOpenReport    Save reports without opening the HTML report
   run.cmd -AndroidOnly     Skip iPhone/iPad scanning
   run.cmd -IosOnly         Skip Android scanning
+
+Selling a device:
+  sellprep.cmd             Report + backup + verify + guarded reset (= run.cmd -SellPrep)
+  run.cmd -Backup          Back up photos, chats media, documents, SMS, contacts, call log
+  run.cmd -PrepareReset    Check reset blockers, then reboot to recovery after typed confirmation
+  run.cmd -BackupDir PATH  Where backups go (default: backups\)
+  run.cmd -SkipBackup      Reset flow without a backup (only if you are sure)
+  run.cmd -AllowIosDownload  Allow downloading third-party libimobiledevice binaries
 
 Optional app setup:
   run.cmd -SetupApps       Install/use Shizuku and optional apks\abattery.apk
@@ -179,8 +203,8 @@ function Ensure-IosTools {
     }
   }
 
-  if ($SkipDownloads) {
-    Write-Step "iOS tools were not found and downloads are skipped."
+  if ($SkipDownloads -or -not $AllowIosDownload) {
+    Write-Step "iOS tools (libimobiledevice) not found. Put them in tools\libimobiledevice, or run with -AllowIosDownload to fetch an unofficial third-party build."
     return $null
   }
 
@@ -868,6 +892,12 @@ function Write-HtmlReport {
       "First use" = [string]$row.samsung_first_use_date
       "Estimated full mAh" = [string]$row.estimated_full_from_charge_counter_mah
       Confidence = [string]$row.confidence
+      "Security patch" = [string]$row.security_patch
+      Storage = [string]$row.storage
+      "Ready to reset" = [string]$(if ($row.ready_to_reset -eq $true) { "yes" } elseif ($row.ready_to_reset -eq $false) { "NO" } else { "check" })
+      "Reset blockers" = [string]$row.reset_blockers
+      "Move first" = [string]$row.move_first
+      Backup = [string]$(if ($row.backup_verified -eq $true) { "verified: $($row.backup_path)" } elseif ($row.backup_path) { "NOT verified: $($row.backup_path)" } else { "" })
     }
   }
 
@@ -884,6 +914,8 @@ function Write-HtmlReport {
   Set-Content -LiteralPath $Path -Value $html -Encoding UTF8
 }
 
+. (Join-Path $PSScriptRoot "sellprep.ps1")
+
 Write-Step "Phone Battery Auditor started."
 
 $apks = $null
@@ -893,6 +925,7 @@ if ($SetupApps -or $InstallBatt -or $LaunchApp -or $ReadScreen) {
   Write-Step "App setup is disabled by default. Running pure USB battery audit."
 }
 
+$script:PendingResets = @()
 $androidDevices = @()
 if (-not $IosOnly) {
   $script:Adb = Ensure-Adb
@@ -952,8 +985,20 @@ foreach ($dev in $androidDevices) {
   }
 
   $row = Collect-BatteryInfo -Serial $dev.Serial
+  Add-SellCheck -Row $row -Check (Get-AndroidSellCheck -Serial $dev.Serial)
   $Rows.Add($row)
   Print-Result -Row $row
+  Print-SellCheck -Row $row
+
+  if ($Backup) {
+    $label = if ($row.market_name) { $row.market_name } else { $row.model }
+    $b = Backup-Android -Serial $dev.Serial -Label $label
+    $row.backup_path = $b.Path
+    $row.backup_verified = $b.Verified
+  }
+  if ($PrepareReset) {
+    $script:PendingResets += ,@($dev.Serial, $row)
+  }
 
   if ($LaunchApp -or $ReadScreen) {
     $opened = $false
@@ -983,8 +1028,18 @@ foreach ($dev in $androidDevices) {
 foreach ($dev in $iosDevices) {
   Write-Step "Processing iPhone/iPad $($dev.Serial)..."
   $row = Collect-IosBatteryInfo -IosTools $iosTools -Udid $dev.Serial
+  Add-SellCheck -Row $row -Check (Get-IosSellCheck -IosTools $iosTools -Udid $dev.Serial)
   $Rows.Add($row)
   Print-Result -Row $row
+  Print-SellCheck -Row $row
+  if ($Backup) {
+    $b = Backup-Ios -IosTools $iosTools -Udid $dev.Serial -Label $row.model
+    $row.backup_path = $b.Path
+    $row.backup_verified = $b.Verified
+  }
+  if ($PrepareReset) {
+    Show-IosResetSteps -Row $row
+  }
 }
 
 if ($Rows.Count -gt 0) {
@@ -996,6 +1051,9 @@ if ($Rows.Count -gt 0) {
   if (-not $NoOpenReport) {
     Write-Step "Opening HTML report..."
     Start-Process -FilePath $HtmlReportPath
+  }
+  foreach ($pending in $script:PendingResets) {
+    Invoke-AndroidResetPrep -Serial $pending[0] -Row $pending[1]
   }
 } else {
   Write-Step "No authorized devices were processed."
