@@ -42,7 +42,7 @@ The HTML report opens automatically. CSV and logs are saved in `reports\` and
 | Pixel / AOSP | Best effort | Tries `cycle_count`, `charge_full`, `charge_full_design` |
 | OnePlus / Oppo / Realme | Best effort | Tries `oplus_chg` paths such as `battery_fcc`, `battery_soh` |
 | Xiaomi / Redmi / POCO | Best effort | Vendor support varies heavily; real-device reports needed |
-| iPhone / iPad | Best effort | Uses libimobiledevice `AppleSmartBattery` over USB after Trust This Computer |
+| iPhone / iPad | Best effort | Uses pymobiledevice3 (AppleSmartBattery via diagnostics) over USB after Trust This Computer |
 
 If a device hides a field, the report shows `unknown` instead of inventing a fake
 number.
