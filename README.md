@@ -66,7 +66,7 @@ For every connected Android phone / iPhone this:
    against the phone** (`backup-summary.txt`).
 5. Only if there are no blockers and the backup verified: asks you to type `ERASE <last 4 of serial>`, reboots the
    phone into recovery and tells you which menu item wipes it. Nothing is erased by the tool itself.
-   iPhone: prints the Erase All Content and Settings steps (Apple does not allow starting a wipe over USB).
+   iPhone/iPad: same gates (Find My off, backup finished, typed confirmation), then erases it over USB.
 
 ### How far the reset can be automated
 
@@ -74,7 +74,7 @@ For every connected Android phone / iPhone this:
 | --- | --- | --- |
 | Windows laptop | `thispc.cmd -Wipe` (as admin): **fully unattended** Remove everything + clean drive via the Windows MDM RemoteWipe interface, after you type `WIPE <last 4 of serial>` | - |
 | Android | Checks accounts, verified backup, then `adb reboot recovery`; you tap **Wipe data** once | Android only allows a factory reset from the phone itself, a device-admin app, or an unlocked bootloader (`fastboot -w`). ADB on a normal phone cannot start it |
-| iPhone / iPad | Report and backup; prints the Erase steps | Apple only allows erasing from the device, Find My / iCloud, or Apple Configurator on supervised devices |
+| iPhone / iPad | Battery capacity + cycles, Find My check, full backup, then **erase over USB** (pymobiledevice3 `backup2 erase-device`) after you type `ERASE <last 4 of serial>` | Refuses while Find My is on: erasing then leaves Activation Lock. Needs Apple's USB driver (Apple Devices app from the Microsoft Store); the tool offers to install it |
 | MacBook | `mac-sellprep.sh --reset` opens Erase All Content and Settings | macOS requires an admin password and Apple ID in that dialog |
 
 Accounts (Google, Xiaomi, Samsung, Apple ID / Find My) must be signed out **before** the reset.
@@ -99,8 +99,9 @@ bash scripts/mac-sellprep.sh          # report only
 bash scripts/mac-sellprep.sh --reset  # then open Erase Assistant after typing ERASE
 ```
 
-iPhone support needs libimobiledevice in `tools\libimobiledevice\`. The fork no longer downloads the unofficial
-build automatically; pass `-AllowIosDownload` to allow it.
+iPhone support uses [pymobiledevice3](https://github.com/doronz88/pymobiledevice3) (installed into `tools\pmd3` on first run)
+and Apple's USB driver from the free **Apple Devices** app. The old libimobiledevice path is still a fallback;
+the unofficial build is only downloaded with `-AllowIosDownload`.
 
 ## Commands
 

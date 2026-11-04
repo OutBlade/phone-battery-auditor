@@ -934,6 +934,7 @@ function Write-HtmlReport {
 }
 
 . (Join-Path $PSScriptRoot "sellprep.ps1")
+. (Join-Path $PSScriptRoot "ios.ps1")
 
 Write-Step "Phone Battery Auditor started."
 
@@ -945,6 +946,7 @@ if ($SetupApps -or $InstallBatt -or $LaunchApp -or $ReadScreen) {
 }
 
 $script:PendingResets = @()
+$script:PendingIosErases = @()
 $androidDevices = @()
 if (-not $IosOnly) {
   $script:Adb = Ensure-Adb
@@ -958,9 +960,15 @@ if (-not $IosOnly) {
 
 $iosTools = $null
 $iosDevices = @()
+$usePmd3 = $false
 if (-not $AndroidOnly) {
-  $iosTools = Ensure-IosTools
-  $iosDevices = @(Get-IosDevices -IosTools $iosTools)
+  if ((Ensure-Pmd3) -and (Test-AppleUsbDriver)) {
+    $usePmd3 = $true
+    $iosDevices = @(Get-IosUdids | ForEach-Object { [pscustomobject]@{ Serial = $_; State = "device"; Details = "ios (pymobiledevice3)" } })
+  } else {
+    $iosTools = Ensure-IosTools
+    $iosDevices = @(Get-IosDevices -IosTools $iosTools)
+  }
   Write-Step "Found $($iosDevices.Count) iPhone/iPad device(s)."
   foreach ($dev in $iosDevices) {
     Write-Step "iOS $($dev.Serial): $($dev.State) $($dev.Details)"
@@ -1046,18 +1054,22 @@ foreach ($dev in $androidDevices) {
 
 foreach ($dev in $iosDevices) {
   Write-Step "Processing iPhone/iPad $($dev.Serial)..."
-  $row = Collect-IosBatteryInfo -IosTools $iosTools -Udid $dev.Serial
-  Add-SellCheck -Row $row -Check (Get-IosSellCheck -IosTools $iosTools -Udid $dev.Serial)
+  if ($usePmd3) {
+    $row = Collect-IosInfo -Udid $dev.Serial
+  } else {
+    $row = Collect-IosBatteryInfo -IosTools $iosTools -Udid $dev.Serial
+    Add-SellCheck -Row $row -Check (Get-IosSellCheck -IosTools $iosTools -Udid $dev.Serial)
+  }
   $Rows.Add($row)
   Print-Result -Row $row
   Print-SellCheck -Row $row
   if ($Backup) {
-    $b = Backup-Ios -IosTools $iosTools -Udid $dev.Serial -Label $row.model
+    $b = if ($usePmd3) { Backup-IosPmd3 -Udid $dev.Serial -Label $row.market_name } else { Backup-Ios -IosTools $iosTools -Udid $dev.Serial -Label $row.model }
     $row.backup_path = $b.Path
     $row.backup_verified = $b.Verified
   }
   if ($PrepareReset) {
-    Show-IosResetSteps -Row $row
+    if ($usePmd3) { $script:PendingIosErases += ,@($dev.Serial, $row) } else { Show-IosResetSteps -Row $row }
   }
 }
 
@@ -1073,6 +1085,9 @@ if ($Rows.Count -gt 0) {
   }
   foreach ($pending in $script:PendingResets) {
     Invoke-AndroidResetPrep -Serial $pending[0] -Row $pending[1]
+  }
+  foreach ($pending in $script:PendingIosErases) {
+    Invoke-IosErase -Udid $pending[0] -Row $pending[1]
   }
 } else {
   Write-Step "No authorized devices were processed."

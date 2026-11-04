@@ -12,8 +12,15 @@ system_profiler SPHardwareDataType | grep -E "Model Name|Chip|Processor Name|Mem
 diskutil info / | grep -E "Disk Size|Volume Free Space" | head -2
 
 if [ -n "$bat" ]; then
-  design=$(val DesignCapacity); raw=$(val AppleRawMaxCapacity); cycles=$(val CycleCount)
-  [ -z "$raw" ] && raw=$(val NominalChargeCapacity)
+  design=$(val DesignCapacity); cycles=$(val CycleCount)
+  # Apple silicon: NominalChargeCapacity / AppleRawMaxCapacity are mAh.
+  # Intel: MaxCapacity is mAh (on Apple silicon it is a 0-100 percentage, so ignore small values).
+  raw=$(val NominalChargeCapacity)
+  [ -z "$raw" ] && raw=$(val AppleRawMaxCapacity)
+  if [ -z "$raw" ]; then
+    mc=$(val MaxCapacity)
+    [ -n "$mc" ] && [ "$mc" -gt 100 ] && raw=$mc
+  fi
   if [ -n "$design" ] && [ -n "$raw" ] && [ "$design" -gt 0 ]; then
     health=$(awk -v a="$raw" -v b="$design" 'BEGIN{printf "%.1f", a/b*100}')
   fi
