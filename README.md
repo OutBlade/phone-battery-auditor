@@ -68,6 +68,19 @@ For every connected Android phone / iPhone this:
    phone into recovery and tells you which menu item wipes it. Nothing is erased by the tool itself.
    iPhone: prints the Erase All Content and Settings steps (Apple does not allow starting a wipe over USB).
 
+### How far the reset can be automated
+
+| Device | What the tool does | Why not fully hands-off |
+| --- | --- | --- |
+| Windows laptop | `thispc.cmd -Wipe` (as admin): **fully unattended** Remove everything + clean drive via the Windows MDM RemoteWipe interface, after you type `WIPE <last 4 of serial>` | - |
+| Android | Checks accounts, verified backup, then `adb reboot recovery`; you tap **Wipe data** once | Android only allows a factory reset from the phone itself, a device-admin app, or an unlocked bootloader (`fastboot -w`). ADB on a normal phone cannot start it |
+| iPhone / iPad | Report and backup; prints the Erase steps | Apple only allows erasing from the device, Find My / iCloud, or Apple Configurator on supervised devices |
+| MacBook | `mac-sellprep.sh --reset` opens Erase All Content and Settings | macOS requires an admin password and Apple ID in that dialog |
+
+Accounts (Google, Xiaomi, Samsung, Apple ID / Find My) must be signed out **before** the reset.
+The tool refuses to reset Android phones that still have them, because the phone would stay locked to
+that account afterwards. Removing or bypassing that lock is out of scope by design.
+
 `backups\` is git-ignored. It contains personal data; keep it off GitHub.
 
 Windows laptop (this PC): battery capacity from `powercfg /batteryreport`, model, serial, CPU, RAM, disks, BitLocker:
@@ -75,6 +88,7 @@ Windows laptop (this PC): battery capacity from `powercfg /batteryreport`, model
 ```bat
 thispc.cmd          & rem report only
 thispc.cmd -Reset   & rem report, then open Windows "Reset this PC" after typing RESET
+thispc.cmd -Wipe    & rem as admin: unattended Remove everything + clean drive after typing WIPE <last4>
 ```
 
 MacBook (run on the Mac): battery capacity and cycles from `AppleSmartBattery`, Find My Mac status,

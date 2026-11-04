@@ -1,8 +1,12 @@
 # Battery health and sell-readiness for the Windows laptop this runs on.
 # Read-only, except -Reset, which opens Windows' own "Reset this PC" dialog
 # (you still choose "Remove everything" and confirm there).
+# -Wipe starts an unattended "Remove everything + clean drive" reset through the Windows
+# MDM RemoteWipe interface (needs admin; runs as SYSTEM). It asks for a typed confirmation
+# first and then cannot be stopped. Run it only on the laptop you are about to sell.
 param(
   [switch]$Reset,
+  [switch]$Wipe,
   [switch]$NoOpenReport
 )
 
@@ -70,6 +74,46 @@ $head = "<style>body{font-family:Segoe UI,Arial,sans-serif;margin:32px;color:#11
 $rows | ConvertTo-Html -Title "This PC sell report" -Head $head -PreContent "<h1>$($cs.Manufacturer) $($cs.Model)</h1><p>Generated $(Get-Date -Format 'yyyy-MM-dd HH:mm')</p>" | Set-Content -LiteralPath $html -Encoding UTF8
 Write-Host "Report saved: $html"
 if (-not $NoOpenReport) { Start-Process $html }
+
+if ($Wipe) {
+  $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+  if (-not $isAdmin) {
+    Write-Host "-Wipe needs an elevated prompt: right-click thispc.cmd > Run as administrator." -ForegroundColor Yellow
+    exit 1
+  }
+  $serialText = [string]$bios.SerialNumber
+  $last4 = $serialText.Substring([math]::Max(0, $serialText.Length - 4))
+  Write-Host ""
+  Write-Host "UNATTENDED WIPE of $($cs.Manufacturer) $($cs.Model) (serial $serialText)" -ForegroundColor Red
+  Write-Host "Windows reinstalls itself and overwrites the drive. All files, apps and accounts on THIS PC are lost."
+  Write-Host "It starts immediately, takes 30-90 minutes, and cannot be cancelled. Keep the charger plugged in."
+  Write-Host "Afterwards: remove the laptop at account.microsoft.com/devices if it was linked to your Microsoft account."
+  $answer = Read-Host "Type WIPE $last4 to start (anything else cancels)"
+  if ($answer -cne "WIPE $last4") { Write-Host "Cancelled."; exit 0 }
+
+  # The MDM bridge only accepts calls from SYSTEM, so run the call from a one-shot SYSTEM task.
+  $worker = Join-Path $env:ProgramData "sellprep-wipe.ps1"
+  @'
+$ns = "root\cimv2\mdm\dmmap"
+$session = New-CimSession
+$params = New-Object Microsoft.Management.Infrastructure.CimMethodParametersCollection
+$params.Add([Microsoft.Management.Infrastructure.CimMethodParameter]::Create("param", "", "String", "In"))
+$instance = Get-CimInstance -Namespace $ns -ClassName "MDM_RemoteWipe" -Filter "ParentID='./Vendor/MSFT' and InstanceID='RemoteWipe'"
+# doWipeProtectedMethod = remove everything + clean drive, and keeps going after a power loss.
+$session.InvokeMethod($ns, $instance, "doWipeProtectedMethod", $params) | Out-String | Set-Content "$env:ProgramData\sellprep-wipe.log"
+'@ | Set-Content -LiteralPath $worker -Encoding UTF8
+  $taskName = "SellPrepWipe"
+  $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$worker`""
+  $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+  Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Force | Out-Null
+  Start-ScheduledTask -TaskName $taskName
+  Start-Sleep -Seconds 15
+  $log = Get-Content "$env:ProgramData\sellprep-wipe.log" -Raw -ErrorAction SilentlyContinue
+  Write-Host "Wipe requested. Windows restarts into the reset shortly."
+  if ($log) { Write-Host $log }
+  Write-Host "If nothing happens within 5 minutes, this Windows edition blocks MDM wipe: use thispc.cmd -Reset instead."
+  exit 0
+}
 
 if ($Reset) {
   Write-Host ""
