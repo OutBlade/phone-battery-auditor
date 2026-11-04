@@ -814,10 +814,29 @@ function Collect-BatteryInfo {
 
   $fullMah = Convert-ToMah $(if ($full) { $full.Value } else { $null })
   $designMah = Convert-ToMah $(if ($design) { $design.Value } else { $null })
+  $fullSource = $(if ($full) { $full.Path } else { $null })
+  $designSource = $(if ($design) { $design.Path } else { $null })
+  $learned = $false
+  if (-not $fullMah -or -not $designMah) {
+    # Fallback for phones that block sysfs (e.g. Xiaomi): Android's own learned capacity
+    # and the power-profile design capacity from batterystats.
+    $stats = Invoke-DeviceAdb -Serial $Serial -AdbArgs @("shell", "dumpsys batterystats | grep -E 'Last learned battery capacity|Min learned battery capacity'") -AllowFail
+    $checkin = Invoke-DeviceAdb -Serial $Serial -AdbArgs @("shell", "dumpsys batterystats --checkin | grep -m1 ',pws,'") -AllowFail
+    $lastLearned = Convert-ToNumber (Get-RegexValue -Text $stats -Pattern "Last learned battery capacity:\s*([0-9]+)")
+    $profileCap = Convert-ToNumber (Get-RegexValue -Text $checkin -Pattern ",pws,([0-9]+)")
+    if (-not $fullMah -and $lastLearned) { $fullMah = $lastLearned; $fullSource = "batterystats last learned capacity"; $learned = $true }
+    if (-not $designMah -and $profileCap) { $designMah = $profileCap; $designSource = "batterystats power profile capacity"; $learned = $true }
+  }
+
   $healthFromCapacity = $null
   if ($fullMah -and $designMah -and $designMah -gt 0) {
-    $healthFromCapacity = [math]::Round(($fullMah / $designMah) * 100.0, 1)
+    $healthFromCapacity = [math]::Round([math]::Min(100.0, ($fullMah / $designMah) * 100.0), 1)
   }
+
+  $statusNames = @{ "1" = "unknown"; "2" = "charging"; "3" = "discharging"; "4" = "not charging"; "5" = "full" }
+  $healthNames = @{ "1" = "unknown"; "2" = "good"; "3" = "overheat"; "4" = "dead"; "5" = "over voltage"; "6" = "failure"; "7" = "cold" }
+  if ($statusNames.ContainsKey([string]$battery["status"])) { $battery["status"] = $statusNames[[string]$battery["status"]] }
+  if ($healthNames.ContainsKey([string]$battery["health"])) { $battery["health"] = $healthNames[[string]$battery["health"]] }
 
   return [pscustomobject]@{
     timestamp = (Get-Date).ToString("s")
@@ -840,16 +859,16 @@ function Collect-BatteryInfo {
     samsung_cycle_estimate = $samsungCycleEstimate
     samsung_discharge_level = $samsungUsage
     full_capacity_mah = $fullMah
-    full_capacity_source = $(if ($full) { $full.Path } else { $null })
+    full_capacity_source = $fullSource
     design_capacity_mah = $designMah
-    design_capacity_source = $(if ($design) { $design.Path } else { $null })
+    design_capacity_source = $designSource
     health_percent_sysfs = $(if ($healthPercent) { $healthPercent.Value } else { $null })
     health_percent_from_capacity = $healthFromCapacity
     samsung_asoc_percent = $samsungAsoc
     samsung_bsoh_percent = $samsungBsoh
     samsung_first_use_date = $samsungFirstUse
     samsung_qr_data = $samsungQrData
-    confidence = $(if ($samsungAsoc -or $healthPercent -or ($fullMah -and $designMah)) { "high" } elseif ($estimatedFullMah) { "estimate" } else { "unknown" })
+    confidence = $(if ($samsungAsoc -or $healthPercent -or ($fullMah -and $designMah -and -not $learned)) { "high" } elseif ($healthFromCapacity -or $estimatedFullMah) { "estimate" } else { "unknown" })
   }
 }
 
